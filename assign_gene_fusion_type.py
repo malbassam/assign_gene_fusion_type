@@ -1,30 +1,26 @@
+#!/usr/bin/env python
+
 import sys
 import os.path
 import argparse
+import pandas as pd
 import re
 
-def main():
-    parser = argparse.ArgumentParser(description="Tool for assigning gene fusion type using bedpe file containing SVs.")
+def main(infilename, gene_db_file, cancer_gene_file, out_dir):
+    
 
-    parser.add_argument('-i', metavar='INFILE', type=str, dest='infilename', help='Input HiC-breakfinder BEDPE file including strand information', required=True)
-    parser.add_argument('-g', metavar='GENE_DB_FILE', type=str, dest='gene_db_file', help='Gene database BED file', required=True)
-    parser.add_argument('-c', metavar='CANCER_GENE_FILE', type=str, dest='cancer_gene_file', help='Cancer gene BED file', required=True)
-    parser.add_argument('-o', metavar='OUT_DIR', type=str, dest='out_dir', help='Output directory [default: the same as the input file]')
-    # parser.add_argument('-b', metavar='BUFFER_SIZE', type=int, dest='buffer_size', default=0, help='Buffer size for overlapping genes (bp) [default: 0]')
+    #print( "\n")
 
-    args = parser.parse_args()
-    #print(args, "\n")
+    #if buffer_size < 0:
+    #    buffer_size = 0
+    #gene_db_file_format = os.path.splitext(gene_db_file)[1].lower()
+    if not out_dir:
+        out_dir = os.path.dirname(infilename)
 
-    #if args.buffer_size < 0:
-    #    args.buffer_size = 0
-    #gene_db_file_format = os.path.splitext(args.gene_db_file)[1].lower()
-    if not args.out_dir:
-        args.out_dir = os.path.dirname(args.infilename)
-
-    filename_short = os.path.basename(args.infilename)
+    filename_short = os.path.basename(infilename)
     basename, suffix = os.path.splitext(filename_short)
-    outfilename = os.path.join(args.out_dir, basename + '_annotated' + suffix)
-    outbedpename = os.path.join(args.out_dir, basename + '_proximity' + '.bedpe')
+    outfilename = os.path.join(out_dir, basename + '_annotated' + suffix)
+    outbedpename = os.path.join(out_dir, basename + '_proximity' + '.bedpe')
     #print('{}, {}'.format(outfilename, outbedpename))
     #sys.exit(0)
 
@@ -47,7 +43,7 @@ def main():
 #chr1	HAVANA	gene	29554	31109	.	+	.	ID=ENSG00000243485.5;gene_id=ENSG00000243485.5;gene_type=lincRNA;gene_name=MIR1302-2HG;level=2;tag=ncRNA_host;havana_gene=OTTHUMG00000000959.2
 
     dict_gene_db = {}
-    with open(args.gene_db_file, 'r') as GENE_DB:
+    with open(gene_db_file, 'r') as GENE_DB:
         for line in GENE_DB:
             if line.startswith('#'):
                 continue
@@ -68,7 +64,7 @@ def main():
             #sys.exit(0)
 
     dict_cancer_genes = {}
-    with open(args.cancer_gene_file, 'r') as CANCER_GENES:
+    with open(cancer_gene_file, 'r') as CANCER_GENES:
         for line in CANCER_GENES:
             if line.startswith('#'):
                 continue
@@ -95,7 +91,7 @@ def main():
 
     buffer = 1000000
 
-    with open(args.infilename, 'r') as INFILE, open(outfilename, 'w') as OUTFILE, open(outbedpename, 'w') as OUTBEDPE:
+    with open(infilename, 'r') as INFILE, open(outfilename, 'w') as OUTFILE, open(outbedpename, 'w') as OUTBEDPE:
         for line in INFILE:
             line = line.strip()
             if line.startswith('#'):
@@ -293,6 +289,7 @@ def main():
 
             # Output the proximity region to a BEDPE file
             OUTBEDPE.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(chr_1, proximity_start_1, proximity_end_1, chr_2, proximity_start_2, proximity_end_2, strand_1, strand_2))
+    return outfilename
 
 
 def overlap(left_1, right_1, left_2, right_2):
@@ -301,6 +298,81 @@ def overlap(left_1, right_1, left_2, right_2):
     else:
         return True
 
+def get_cancer_gene_list(outfilename, path):
+    '''a function that takes gene annotation bedpe file as input 
+    and returns the cancer gene list in a text file'''
+    df = pd.read_csv(f'{path}/{outfilename}', 
+                     sep='\t',
+                     skiprows=1, ### skipping first row because the headers are incomplete ####
+                     names=['#chr1',	'x1',	'x2',	'chr2',	'y1',	'y2',	
+                            'strand1',	'strand2',	'Fusion_type',	'Prox_start1',	
+                            'Prox_end1',	'Prox_start2',	'Prox_end2',	'Dist1',	
+                            'Dist2',	'Proximity_genes1',	'Proximity_genes2'])
+    # remove the rows that do not have any proximity data
+    df = df[df.Fusion_type != '0']
+    # split the fusion type into fusion_class (1,2,3) and fusion_type (A,B,C)
+    df['fusion_class'] = df['Fusion_type'].apply(lambda x: x[0])
+    df['fusion_type']  = df['Fusion_type'].apply(lambda x: x[1])
+    # only get rows with class 3
+    df1 = df[df.fusion_class == '3']
+    # replace "nan" with ''
+    df1 = df1.fillna('')
+    # extract proximity data from the dataframe as two lists
+    prox_list1=list(df1.Proximity_genes1)
+    prox_list2=list(df1.Proximity_genes2)
+    ar1=list({i.strip() for i in set(prox_list1) if i != ''})
+    ar2=list({i.strip() for i in set(prox_list2) if i != ''})
+    # finally generate the gene list
+    gene_list = []
+    # parse data based on presence of "[" and report genes that are not in
+    # square brackets
+    for i in ar1:
+        # if the data has "["
+        if '[' in i: 
+            parse_ar1 = i.split('[')
+            if parse_ar1[0]:
+                gene_list.append(parse_ar1[0])
+                print (parse_ar1)
+        # if the data doesn't have "["
+        elif '[' not in i:
+            gene_list.append(i)
+
+    for i in ar2:
+        if '[' in i: 
+            parse_ar2 = i.split('[')
+            if parse_ar2[0]:
+                gene_list.append(parse_ar2[0])
+        elif '[' not in i:
+            gene_list.append(i)
+    # remove duplicates by using set
+    final_set = list(set(gene_list))
+
+    # write the file
+    with open(f'{path}/proximity_cancer_genelist.txt', 'w') as file:
+        for i in final_set:
+            file.write(f'{i}\n')
+
+    
 
 if __name__ == '__main__':
-    main()
+    
+    parser = argparse.ArgumentParser(description="Tool for assigning gene fusion type using bedpe file containing SVs.")
+
+    parser.add_argument('-i', metavar='INFILE', type=str, dest='infilename', help='Input HiC-breakfinder BEDPE file including strand information', required=True)
+    parser.add_argument('-g', metavar='GENE_DB_FILE', type=str, dest='gene_db_file', help='Gene database BED file', required=True)
+    parser.add_argument('-c', metavar='CANCER_GENE_FILE', type=str, dest='cancer_gene_file', help='Cancer gene BED file', required=True)
+    parser.add_argument('-o', metavar='OUT_DIR', type=str, dest='out_dir', help='Output directory [default: the same as the input file]')
+    # parser.add_argument('-b', metavar='BUFFER_SIZE', type=int, dest='buffer_size', default=0, help='Buffer size for overlapping genes (bp) [default: 0]')
+
+    args= parser.parse_args()
+    
+    infilename = args.infilename
+    gene_db_file = args.gene_db_file
+    cancer_gene_file = args.cancer_gene_file
+    out_dir = args.out_dir
+    
+    outfilename = main(infilename, gene_db_file, cancer_gene_file, out_dir)
+    path = os.getcwd()
+    
+    get_cancer_gene_list(outfilename,path)
+    
